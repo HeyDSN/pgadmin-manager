@@ -1,0 +1,8 @@
+{{define "content"}}
+<section class="stats">
+  <article><span>PostgreSQL</span><strong>{{.ServerStatus}}</strong><small>Server status</small></article>
+  <article><span>Users</span><strong>{{.TotalUsers}}</strong><small>Login roles</small></article>
+  <article><span>Databases</span><strong>{{.TotalDatabases}}</strong><small>Non-template</small></article>
+  <article><span>Managed</span><strong>{{.ManagedDatabases}}</strong><small>{{.LegacyDatabases}} need review</small></article>
+</section>
+{{end}}

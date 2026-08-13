@@ -1,0 +1,49 @@
+{{define "layout"}}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{{.Title}} · PostgreSQL Manager</title>
+  <link rel="icon" type="image/png" sizes="512x512" href="/static/favicon.png">
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <a class="brand" href="/">
+        <span class="brand-mark">PG</span>
+        <span>PostgreSQL<br><small>Manager</small></span>
+      </a>
+      <nav>
+        <a class="{{if eq .Active "dashboard"}}active{{end}}" href="/">Dashboard</a>
+        <a class="{{if eq .Active "users"}}active{{end}}" href="/users">Users</a>
+        <a class="{{if eq .Active "databases"}}active{{end}}" href="/databases">Databases</a>
+      </nav>
+      <div class="sidebar-note"><span class="live-dot sidebar-live">LIVE</span></div>
+    </aside>
+    <main>
+      <header><div><span class="eyebrow">ADMIN CONSOLE</span><h1>{{.Title}}</h1></div></header>
+      {{if .Success}}<div class="alert success">{{.Success}}</div>{{end}}
+      {{if .Error}}<div class="alert error">{{.Error}}</div>{{end}}
+      {{template "content" .}}
+    </main>
+  </div>
+  <dialog class="confirm-dialog" id="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-message">
+    <div class="dialog-icon danger-dialog-icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2m-9 0 1 14h8l1-14M10 10v6m4-6v6"/></svg>
+    </div>
+    <div class="dialog-copy">
+      <span class="eyebrow">CONFIRM ACTION</span>
+      <h2 id="confirm-title">Are you sure?</h2>
+      <p id="confirm-message"></p>
+    </div>
+    <div class="dialog-actions">
+      <button type="button" class="button secondary" data-confirm-cancel>Cancel</button>
+      <button type="button" class="button danger" data-confirm-submit>Confirm</button>
+    </div>
+  </dialog>
+</body>
+</html>
+{{end}}

@@ -1,0 +1,15 @@
+.git
+.github/
+.artifacts/
+.agents/
+.codex/
+.env
+.env.*
+.gitignore
+README*
+compose*.yaml
+*.log
+coverage.out
+pgadmin-manager
+docker/
+scripts/

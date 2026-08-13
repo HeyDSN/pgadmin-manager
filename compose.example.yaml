@@ -1,0 +1,10 @@
+services:
+  pgadmin-manager:
+    image: ${PGADMIN_MANAGER_IMAGE:-ghcr.io/your-github-username/pgadmin-manager:latest}
+    pull_policy: always
+    restart: unless-stopped
+    env_file: ${PGADMIN_MANAGER_ENV_FILE:-.env}
+    ports:
+      - "127.0.0.1:8080:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
