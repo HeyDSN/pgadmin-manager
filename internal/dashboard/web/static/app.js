@@ -41,6 +41,18 @@ document.querySelectorAll("dialog[data-auto-open]").forEach(function (dialog) {
   dialog.showModal();
 });
 
+document.querySelectorAll("[data-open-dialog]").forEach(function (button) {
+  button.addEventListener("click", function () {
+    document.getElementById(button.dataset.openDialog)?.showModal();
+  });
+});
+
+document.querySelectorAll("[data-close-dialog]").forEach(function (button) {
+  button.addEventListener("click", function () {
+    button.closest("dialog")?.close();
+  });
+});
+
 document.querySelectorAll("[data-table-search]").forEach(function (input) {
   const table = document.getElementById(input.dataset.tableSearch);
   const body = table?.tBodies[0];

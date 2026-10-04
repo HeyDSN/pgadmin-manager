@@ -39,23 +39,30 @@ type AccessChoice struct {
 }
 
 type PageData struct {
-	Title            string
-	Active           string
-	CSRFToken        string
-	Success          string
-	Error            string
-	Users            []User
-	Databases        []Database
-	Preview          *MigrationPlan
-	PreviewCounts    []CountRow
-	ServerStatus     string
-	TotalUsers       int
-	TotalDatabases   int
-	ManagedDatabases int
-	LegacyDatabases  int
-	ShowAdd          bool
-	ManagedUser      string
-	AccessChoices    []AccessChoice
+	Title              string
+	Active             string
+	CSRFToken          string
+	Success            string
+	Error              string
+	Users              []User
+	Databases          []Database
+	Preview            *MigrationPlan
+	PreviewCounts      []CountRow
+	ServerStatus       string
+	TotalUsers         int
+	TotalDatabases     int
+	ManagedDatabases   int
+	LegacyDatabases    int
+	ShowAdd            bool
+	ManagedUser        string
+	AccessChoices      []AccessChoice
+	LargestDatabases   []Database
+	ReviewDatabases    []Database
+	RegularUsers       int
+	SuperuserUsers     int
+	ManagedPercent     int
+	UsersAvailable     bool
+	DatabasesAvailable bool
 }
 
 func NewHandler(service *PostgresService, logger *log.Logger) (http.Handler, error) {
@@ -110,16 +117,55 @@ func (h *Handler) dashboard(w http.ResponseWriter, r *http.Request) {
 		data.ServerStatus = "Error"
 		data.Error = joinErrors(userErr, databaseErr)
 	}
+	data.UsersAvailable = userErr == nil
+	data.DatabasesAvailable = databaseErr == nil
+	populateDashboard(&data, users, databases)
+	h.render(w, http.StatusOK, "dashboard.html", data)
+}
+
+func populateDashboard(data *PageData, users []User, databases []Database) {
+	data.Users = append([]User(nil), users...)
 	data.TotalUsers = len(users)
 	data.TotalDatabases = len(databases)
+	for _, user := range users {
+		if user.Superuser {
+			data.SuperuserUsers++
+		} else {
+			data.RegularUsers++
+		}
+	}
+	sort.Slice(data.Users, func(i, j int) bool {
+		a, b := data.Users[i], data.Users[j]
+		if a.Superuser != b.Superuser {
+			return !a.Superuser
+		}
+		if len(a.FullAccessDatabases) != len(b.FullAccessDatabases) {
+			return len(a.FullAccessDatabases) > len(b.FullAccessDatabases)
+		}
+		return a.Name < b.Name
+	})
 	for _, database := range databases {
 		if database.Status == "Managed" {
 			data.ManagedDatabases++
 		} else {
 			data.LegacyDatabases++
+			data.ReviewDatabases = append(data.ReviewDatabases, database)
 		}
 	}
-	h.render(w, http.StatusOK, "dashboard.html", data)
+	if len(databases) > 0 {
+		data.ManagedPercent = data.ManagedDatabases * 100 / len(databases)
+	}
+	data.LargestDatabases = append([]Database(nil), databases...)
+	sort.Slice(data.LargestDatabases, func(i, j int) bool {
+		a, b := data.LargestDatabases[i], data.LargestDatabases[j]
+		if a.SizeBytes != b.SizeBytes {
+			return a.SizeBytes > b.SizeBytes
+		}
+		return a.Name < b.Name
+	})
+	if len(data.LargestDatabases) > 5 {
+		data.LargestDatabases = data.LargestDatabases[:5]
+	}
 }
 
 func (h *Handler) users(w http.ResponseWriter, r *http.Request) {
@@ -206,7 +252,8 @@ func (h *Handler) renderUsers(w http.ResponseWriter, r *http.Request, status int
 	databases, databaseErr := h.service.ListDatabases(r.Context())
 	data := PageData{
 		Title: "Users", Active: "users", CSRFToken: h.csrfToken,
-		Users: users, Databases: databases, Success: r.URL.Query().Get("success"),
+		ServerStatus: databaseServerStatus(userErr, databaseErr),
+		Users:        users, Databases: databases, Success: r.URL.Query().Get("success"),
 		Error:   joinErrors(errorFromString(actionError), userErr, databaseErr),
 		ShowAdd: r.URL.Query().Get("add") == "1",
 	}
@@ -399,7 +446,8 @@ func (h *Handler) renderDatabases(w http.ResponseWriter, r *http.Request, status
 	users, userErr := h.service.ListUsers(r.Context())
 	data := PageData{
 		Title: "Databases", Active: "databases", CSRFToken: h.csrfToken,
-		Databases: databases, Users: users, Success: r.URL.Query().Get("success"),
+		ServerStatus: databaseServerStatus(userErr, databaseErr),
+		Databases:    databases, Users: users, Success: r.URL.Query().Get("success"),
 		Error:   joinErrors(errorFromString(actionError), databaseErr, userErr),
 		ShowAdd: r.URL.Query().Get("add") == "1",
 	}
@@ -440,6 +488,15 @@ func (h *Handler) health(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte("ok\n"))
+}
+
+func databaseServerStatus(errs ...error) string {
+	for _, err := range errs {
+		if err != nil {
+			return "Error"
+		}
+	}
+	return "Connected"
 }
 
 func (h *Handler) validForm(w http.ResponseWriter, r *http.Request) bool {

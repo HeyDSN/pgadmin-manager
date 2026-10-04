@@ -32,6 +32,7 @@ type Database struct {
 	Name            string
 	Owner           string
 	Size            string
+	SizeBytes       int64
 	SharedOwnerRole string
 	FullAccessUsers []string
 	Status          string
@@ -132,10 +133,15 @@ WITH RECURSIVE membership AS (
     SELECT m.roleid, membership.member
     FROM pg_auth_members m
     JOIN membership ON membership.roleid = m.member
+), database_sizes AS MATERIALIZED (
+    SELECT oid, pg_database_size(oid) AS bytes
+    FROM pg_database
+    WHERE NOT datistemplate AND datname <> 'postgres'
 )
 SELECT d.datname,
        pg_get_userbyid(d.datdba),
-       pg_size_pretty(pg_database_size(d.datname)),
+       pg_size_pretty(database_sizes.bytes),
+       database_sizes.bytes,
        COALESCE(owner_role.rolname, '-'),
        COALESCE(
            array_agg(DISTINCT member_role.rolname::text ORDER BY member_role.rolname::text)
@@ -148,11 +154,12 @@ SELECT d.datname,
            ELSE 'Legacy'
        END
 FROM pg_database d
+JOIN database_sizes ON database_sizes.oid = d.oid
 LEFT JOIN pg_roles owner_role ON owner_role.rolname = d.datname || '__owner'
 LEFT JOIN membership ON membership.roleid = owner_role.oid AND owner_role.oid = d.datdba
 LEFT JOIN pg_roles member_role ON member_role.oid = membership.member
-WHERE NOT d.datistemplate
-GROUP BY d.datname, d.datdba, owner_role.oid, owner_role.rolname
+WHERE NOT d.datistemplate AND d.datname <> 'postgres'
+GROUP BY d.datname, d.datdba, database_sizes.bytes, owner_role.oid, owner_role.rolname
 ORDER BY d.datname`)
 	if err != nil {
 		return nil, err
@@ -162,7 +169,7 @@ ORDER BY d.datname`)
 	var databases []Database
 	for rows.Next() {
 		var database Database
-		if err := rows.Scan(&database.Name, &database.Owner, &database.Size, &database.SharedOwnerRole, &database.FullAccessUsers, &database.Status); err != nil {
+		if err := rows.Scan(&database.Name, &database.Owner, &database.Size, &database.SizeBytes, &database.SharedOwnerRole, &database.FullAccessUsers, &database.Status); err != nil {
 			return nil, err
 		}
 		databases = append(databases, database)
@@ -414,6 +421,9 @@ func validateIdentifier(label, value string) error {
 }
 
 func sharedOwnerRole(database string) (string, error) {
+	if database == "postgres" || database == "template0" || database == "template1" {
+		return "", fmt.Errorf("built-in database %q is protected from management", database)
+	}
 	if err := validateIdentifier("database", database); err != nil {
 		return "", err
 	}

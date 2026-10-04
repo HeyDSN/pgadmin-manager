@@ -7,6 +7,8 @@
   <title>{{.Title}} · PostgreSQL Manager</title>
   <link rel="icon" type="image/png" sizes="512x512" href="/static/favicon.png">
   <link rel="stylesheet" href="/static/app.css">
+  <link rel="stylesheet" href="/static/layout.css">
+  {{if eq .Active "dashboard"}}<link rel="stylesheet" href="/static/dashboard.css">{{end}}
   <script src="/static/app.js" defer></script>
 </head>
 <body>
@@ -21,10 +23,9 @@
         <a class="{{if eq .Active "users"}}active{{end}}" href="/users">Users</a>
         <a class="{{if eq .Active "databases"}}active{{end}}" href="/databases">Databases</a>
       </nav>
-      <div class="sidebar-note"><span class="live-dot sidebar-live">LIVE</span></div>
     </aside>
     <main>
-      <header><div><span class="eyebrow">ADMIN CONSOLE</span><h1>{{.Title}}</h1></div></header>
+      <header class="page-header"><div><span class="eyebrow">ADMIN CONSOLE</span><h1>{{.Title}}</h1><p class="page-subtitle">{{if eq .Active "users"}}Login users &amp; database access overview{{else if eq .Active "databases"}}Database inventory &amp; shared ownership overview{{else}}Database ownership &amp; access overview{{end}}</p></div><span class="server-connection {{if eq .ServerStatus "Connected"}}connected{{else}}unavailable{{end}}">PostgreSQL · {{.ServerStatus}}</span></header>
       {{if .Success}}<div class="alert success">{{.Success}}</div>{{end}}
       {{if .Error}}<div class="alert error">{{.Error}}</div>{{end}}
       {{template "content" .}}

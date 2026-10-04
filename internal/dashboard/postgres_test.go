@@ -1,9 +1,31 @@
 package dashboard
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
+
+func TestBuiltInDatabasesAreProtectedBeforeConnecting(t *testing.T) {
+	service := &PostgresService{}
+	for _, database := range []string{"postgres", "template0", "template1"} {
+		t.Run(database, func(t *testing.T) {
+			ctx := context.Background()
+			if err := service.CreateDatabase(ctx, database); err == nil {
+				t.Fatal("creating a built-in database was not rejected")
+			}
+			if _, err := service.PreviewMigration(ctx, database); err == nil {
+				t.Fatal("previewing a built-in database was not rejected")
+			}
+			if _, err := service.GrantFullAccess(ctx, database, "user"); err == nil {
+				t.Fatal("granting built-in database access was not rejected")
+			}
+			if err := service.RevokeFullAccess(ctx, database, "user"); err == nil {
+				t.Fatal("revoking built-in database access was not rejected")
+			}
+		})
+	}
+}
 
 func TestSharedOwnerRole(t *testing.T) {
 	t.Parallel()
