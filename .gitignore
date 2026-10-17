@@ -1,5 +1,4 @@
 .artifacts/
 .env
-pgadmin-manager
 *.log
 coverage.out
