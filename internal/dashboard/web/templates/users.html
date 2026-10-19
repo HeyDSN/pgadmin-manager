@@ -2,25 +2,38 @@
 <section class="panel table-panel">
   <div class="panel-head"><label class="table-search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><input type="search" placeholder="Search users..." aria-label="Search users" data-table-search="users-table"></label><div class="panel-tools"><span class="count-pill">{{len .Users}} login users</span><a class="button small-button" href="/users?add=1">Add user</a></div></div>
   <div class="table-wrap"><table id="users-table"><thead><tr><th>Username</th><th>Superuser</th><th>Create DB</th><th>Create role</th><th>Full-access databases</th><th class="action-column user-actions-column">Action</th></tr></thead>
-  <tbody>{{range .Users}}<tr><td><strong>{{.Name}}</strong></td><td>{{if .Superuser}}Yes{{else}}No{{end}}</td><td>{{if .CreateDB}}Yes{{else}}No{{end}}</td><td>{{if .CreateRole}}Yes{{else}}No{{end}}</td><td><ul class="access-list">{{range .FullAccessDatabases}}<li>{{.}}</li>{{else}}<li class="none">-</li>{{end}}</ul></td><td class="action-column user-actions-column"><div class="table-actions">{{if .Superuser}}<span class="protected-label">Protected</span>{{else}}<a class="manage-button" href="/users?manage={{urlquery .Name}}">Manage access</a><form method="post" action="/users/delete" class="icon-action-form js-confirm" data-confirm-title="Delete user?" data-confirm="Delete user {{.Name}}? This action cannot be undone."><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="username" value="{{.Name}}"><input type="hidden" name="confirmed" value=""><button type="submit" class="delete-button" title="Delete {{.Name}}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2m-9 0 1 14h8l1-14M10 10v6m4-6v6"/></svg><span>Delete</span></button></form>{{end}}</div></td></tr>{{else}}<tr><td colspan="6" class="empty">No login users found</td></tr>{{end}}</tbody></table></div>
+  <tbody>{{range .Users}}<tr><td><strong>{{.Name}}</strong></td><td>{{if .Superuser}}Yes{{else}}No{{end}}</td><td>{{if .CreateDB}}Yes{{else}}No{{end}}</td><td>{{if .CreateRole}}Yes{{else}}No{{end}}</td><td><ul class="access-list">{{range .FullAccessDatabases}}<li>{{.}}</li>{{else}}<li class="none">-</li>{{end}}</ul></td><td class="action-column user-actions-column"><div class="table-actions">{{if .Superuser}}<span class="protected-label">Protected</span>{{else}}<a class="manage-button" href="/users?manage={{urlquery .Name}}">Manage access</a><a class="manage-button" href="/users?password={{urlquery .Name}}">Password</a><form method="post" action="/users/delete" class="icon-action-form js-confirm" data-confirm-title="Delete user?" data-confirm="Delete user {{.Name}}? This action cannot be undone."><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="username" value="{{.Name}}"><input type="hidden" name="confirmed" value=""><button type="submit" class="delete-button" title="Delete {{.Name}}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2m-9 0 1 14h8l1-14M10 10v6m4-6v6"/></svg><span>Delete</span></button></form>{{end}}</div></td></tr>{{else}}<tr><td colspan="6" class="empty">No login users found</td></tr>{{end}}</tbody></table></div>
 </section>
 
 {{if .ShowAdd}}
 <dialog class="form-dialog" data-auto-open aria-labelledby="add-user-title">
-  <div class="modal-head"><div><span class="eyebrow">NEW LOGIN ROLE</span><h2 id="add-user-title">Add user</h2></div><a class="modal-close" href="/users" aria-label="Close">×</a></div>
+  <div class="modal-head"><div><span class="eyebrow">new login role</span><h2 id="add-user-title">Add user</h2></div><a class="modal-close" href="/users" aria-label="Close">×</a></div>
   <form method="post" action="/users" autocomplete="off" class="modal-form">
     <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
     <label>Username<input name="username" required maxlength="63" spellcheck="false" autofocus></label>
-    <label>Password<input type="password" name="password" required autocomplete="new-password"></label>
+    <label>Password<span class="copy-field"><input id="add-password" type="password" name="password" required autocomplete="new-password"><button type="button" class="button secondary small-button" data-generate="add-password">Generate</button><button type="button" class="button secondary small-button" data-copy="add-password">Copy</button></span></label>
     <p class="form-note">Creates a restricted LOGIN role. Password is never stored or logged.</p>
     <div class="modal-actions"><a class="button secondary" href="/users">Cancel</a><button type="submit">Create user</button></div>
   </form>
 </dialog>
 {{end}}
 
+{{if .PasswordUser}}
+<dialog class="form-dialog" data-auto-open aria-labelledby="password-title">
+  <div class="modal-head"><div><span class="eyebrow">change password</span><h2 id="password-title">{{.PasswordUser}}</h2></div><a class="modal-close" href="/users" aria-label="Close">×</a></div>
+  <form method="post" action="/users/password" autocomplete="off" class="modal-form">
+    <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+    <input type="hidden" name="username" value="{{.PasswordUser}}">
+    <label>New password<span class="copy-field"><input id="new-password" type="password" name="password" required autocomplete="new-password" autofocus><button type="button" class="button secondary small-button" data-generate="new-password">Generate</button><button type="button" class="button secondary small-button" data-copy="new-password">Copy</button></span></label>
+    <p class="form-note">Existing sessions stay connected until they end. Password is never stored or logged.</p>
+    <div class="modal-actions"><a class="button secondary" href="/users">Cancel</a><button type="submit">Update password</button></div>
+  </form>
+</dialog>
+{{end}}
+
 {{if .ManagedUser}}
 <dialog class="access-dialog" data-auto-open aria-labelledby="manage-user-title">
-  <div class="modal-head"><div><span class="eyebrow">DATABASE ACCESS</span><h2 id="manage-user-title">{{.ManagedUser}}</h2></div><a class="modal-close" href="/users" aria-label="Close">×</a></div>
+  <div class="modal-head"><div><span class="eyebrow">database access</span><h2 id="manage-user-title">{{.ManagedUser}}</h2></div><a class="modal-close" href="/users" aria-label="Close">×</a></div>
   <form method="post" action="/users/access" class="access-form">
     <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
     <input type="hidden" name="username" value="{{.ManagedUser}}">

@@ -1,9 +1,16 @@
 {{define "content"}}
 <section class="stats dashboard-stats" aria-label="Server overview">
-  <article><span>Databases</span><strong>{{if .DatabasesAvailable}}{{.TotalDatabases}}{{else}}Unavailable{{end}}</strong><small>Non-template databases</small></article>
-  <article><span>Login users</span><strong>{{if .UsersAvailable}}{{.TotalUsers}}{{else}}Unavailable{{end}}</strong><small>{{if .UsersAvailable}}{{.RegularUsers}} regular · {{.SuperuserUsers}} superuser{{else}}Unable to load users{{end}}</small></article>
-  <article><span>Shared ownership</span><strong>{{if .DatabasesAvailable}}{{.ManagedDatabases}} <em>/ {{.TotalDatabases}}</em>{{else}}Unavailable{{end}}</strong><small>{{if .DatabasesAvailable}}{{.LegacyDatabases}} outside shared ownership{{else}}Unable to load databases{{end}}</small>{{if .DatabasesAvailable}}<progress class="status-progress" value="{{.ManagedPercent}}" max="100" aria-label="Shared ownership coverage">{{.ManagedPercent}}%</progress>{{end}}</article>
+  <article><svg class="stat-icon" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5.5" rx="8" ry="3"/><path d="M4 5.5v13c0 1.7 3.6 3 8 3s8-1.3 8-3v-13M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg><span>Databases</span><strong>{{if .DatabasesAvailable}}{{.TotalDatabases}}{{else}}Unavailable{{end}}</strong><small>Non-template databases</small></article>
+  <article><svg class="stat-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.6-3.6 3.2-5.5 6.5-5.5s5.9 1.9 6.5 5.5M16 4.8a3.5 3.5 0 0 1 0 6.4M18 14.8c2 .6 3.2 2.3 3.5 5.2"/></svg><span>Login users</span><strong>{{if .UsersAvailable}}{{.TotalUsers}}{{else}}Unavailable{{end}}</strong><small>{{if .UsersAvailable}}{{.RegularUsers}} regular · {{.SuperuserUsers}} superuser{{else}}Unable to load users{{end}}</small></article>
+  <article><svg class="stat-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4 6v5c0 5 3.4 8.4 8 10 4.6-1.6 8-5 8-10V6zM8.5 12l2.5 2.5 4.5-5"/></svg><span>Shared ownership</span><strong>{{if .DatabasesAvailable}}{{.ManagedDatabases}} <em>/ {{.TotalDatabases}}</em>{{else}}Unavailable{{end}}</strong><small>{{if .DatabasesAvailable}}{{.LegacyDatabases}} outside shared ownership{{else}}Unable to load databases{{end}}</small>{{if .DatabasesAvailable}}<progress class="status-progress" value="{{.ManagedPercent}}" max="100" aria-label="Shared ownership coverage">{{.ManagedPercent}}%</progress>{{end}}</article>
 </section>
+{{if .Health}}<section class="health" aria-label="Server health">
+  <div><span>Server</span><strong>PostgreSQL {{.Health.Version}}</strong><small>Up {{.Health.Uptime}}</small></div>
+  <div><span>Connections</span><strong>{{.Health.Connections}} <em>/ {{.Health.MaxConnections}}</em></strong><progress class="status-progress{{if ge .Health.UsedPercent 80}} warn{{end}}" value="{{.Health.UsedPercent}}" max="100" aria-label="Connection slots used">{{.Health.UsedPercent}}%</progress><a class="text-link" href="/connections">View sessions →</a></div>
+  <div><span>Cache hit ratio</span><strong>{{.Health.CachePercent}}{{if ne .Health.CachePercent "n/a"}}<em>%</em>{{end}}</strong><small>Reads served from memory</small></div>
+  <div><span>Total data</span><strong>{{.Health.TotalSize}}</strong><small>Across all databases</small></div>
+</section>
+{{end}}
 <div class="dashboard-grid">
   <section class="panel table-panel dashboard-inventory">
     <div class="panel-head"><h2>Largest databases</h2><a class="text-link" href="/databases">View all databases →</a></div>
@@ -35,7 +42,7 @@
 </div>
 {{range $index, $user := .Users}}
 <dialog class="form-dialog database-detail-dialog" id="user-detail-{{$index}}" aria-labelledby="user-detail-title-{{$index}}">
-  <div class="modal-head"><div><span class="eyebrow">USER OVERVIEW</span><h2 id="user-detail-title-{{$index}}">{{$user.Name}}</h2></div><button type="button" class="modal-close" data-close-dialog aria-label="Close user details">×</button></div>
+  <div class="modal-head"><div><span class="eyebrow">user overview</span><h2 id="user-detail-title-{{$index}}">{{$user.Name}}</h2></div><button type="button" class="modal-close" data-close-dialog aria-label="Close user details">×</button></div>
   <div class="database-detail-content">
     <dl><dt>Superuser</dt><dd>{{if $user.Superuser}}Yes{{else}}No{{end}}</dd><dt>Create databases</dt><dd>{{if $user.CreateDB}}Yes{{else}}No{{end}}</dd><dt>Create roles</dt><dd>{{if $user.CreateRole}}Yes{{else}}No{{end}}</dd><dt>Shared full-access databases</dt><dd><ul class="access-list">{{range $user.FullAccessDatabases}}<li>{{.}}</li>{{else}}<li class="none">No shared mapping</li>{{end}}</ul></dd></dl>
     <p class="form-note">{{if $user.Superuser}}Superusers have administrative access independently of shared mappings.{{else}}Shared mappings do not include every PostgreSQL privilege.{{end}}</p>
@@ -45,7 +52,7 @@
 {{end}}
 {{range $index, $database := .LargestDatabases}}
 <dialog class="form-dialog database-detail-dialog" id="database-detail-{{$index}}" aria-labelledby="database-detail-title-{{$index}}">
-  <div class="modal-head"><div><span class="eyebrow">DATABASE OVERVIEW</span><h2 id="database-detail-title-{{$index}}">{{$database.Name}}</h2></div><button type="button" class="modal-close" data-close-dialog aria-label="Close database details">×</button></div>
+  <div class="modal-head"><div><span class="eyebrow">database overview</span><h2 id="database-detail-title-{{$index}}">{{$database.Name}}</h2></div><button type="button" class="modal-close" data-close-dialog aria-label="Close database details">×</button></div>
   <div class="database-detail-content">
     <dl><dt>Size</dt><dd>{{$database.Size}}</dd><dt>Owner</dt><dd><code>{{$database.Owner}}</code></dd><dt>Shared role</dt><dd><code>{{$database.SharedOwnerRole}}</code></dd><dt>Ownership status</dt><dd>{{$database.Status}}</dd><dt>Full-access users</dt><dd><ul class="access-list">{{range $database.FullAccessUsers}}<li>{{.}}</li>{{else}}<li class="none">No shared mapping</li>{{end}}</ul></dd></dl>
     <p class="form-note">Shared mappings do not include every PostgreSQL privilege or superuser access.</p>

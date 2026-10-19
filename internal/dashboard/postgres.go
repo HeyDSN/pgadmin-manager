@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -13,7 +16,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const maxIdentifierBytes = 63
+const (
+	maxIdentifierBytes = 63
+	appName            = "pgadmin-manager"
+)
 
 type PostgresService struct {
 	pool       *pgxpool.Pool
@@ -36,6 +42,30 @@ type Database struct {
 	SharedOwnerRole string
 	FullAccessUsers []string
 	Status          string
+}
+
+type Connection struct {
+	PID         int
+	Database    string
+	User        string
+	Application string
+	Client      string
+	State       string
+	Since       string
+	Query       string
+	Wait        string
+	BlockedBy   []int32
+	IdleTxLong  bool
+}
+
+type ServerHealth struct {
+	Version        string
+	Uptime         string
+	Connections    int
+	MaxConnections int
+	CachePercent   string
+	TotalSize      string
+	UsedPercent    int
 }
 
 type MigrationObject struct {
@@ -64,6 +94,7 @@ func NewPostgresService(ctx context.Context) (*PostgresService, error) {
 	}
 	cfg.MaxConns = 5
 	cfg.MinConns = 0
+	cfg.ConnConfig.RuntimeParams["application_name"] = appName
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
@@ -198,6 +229,42 @@ func (s *PostgresService) CreateUser(ctx context.Context, username, password str
 	}
 	if _, err := s.pool.Exec(ctx, statement); err != nil {
 		return fmt.Errorf("create user: %w", err)
+	}
+	return nil
+}
+
+func (s *PostgresService) ChangeUserPassword(ctx context.Context, username, password string) error {
+	if err := validateIdentifier("username", username); err != nil {
+		return err
+	}
+	if password == "" {
+		return errors.New("password cannot be empty")
+	}
+	if strings.IndexByte(password, 0) >= 0 {
+		return errors.New("password contains an invalid null byte")
+	}
+
+	var login, superuser, currentUser bool
+	err := s.pool.QueryRow(ctx, `SELECT rolcanlogin, rolsuper, rolname = current_user FROM pg_roles WHERE rolname = $1`, username).Scan(&login, &superuser, &currentUser)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("login user %q does not exist", username)
+	}
+	if err != nil {
+		return err
+	}
+	if !login {
+		return fmt.Errorf("role %q is not a login user", username)
+	}
+	if superuser || currentUser {
+		return fmt.Errorf("refusing to change password of administrative user %q", username)
+	}
+
+	var statement string
+	if err := s.pool.QueryRow(ctx, `SELECT format('ALTER ROLE %I PASSWORD %L', $1::text, $2::text)`, username, password).Scan(&statement); err != nil {
+		return err
+	}
+	if _, err := s.pool.Exec(ctx, statement); err != nil {
+		return fmt.Errorf("change password: %w", err)
 	}
 	return nil
 }
@@ -405,6 +472,140 @@ func (s *PostgresService) CreateDatabase(ctx context.Context, database string) e
 		return fmt.Errorf("database created but public schema setup failed: %w", err)
 	}
 	return nil
+}
+
+func (s *PostgresService) DeleteDatabase(ctx context.Context, database string) error {
+	ownerRole, err := sharedOwnerRole(database)
+	if err != nil {
+		return err
+	}
+	var exists bool
+	if err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = $1 AND NOT datistemplate)`, database).Scan(&exists); err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("database %q does not exist", database)
+	}
+	if _, err := s.pool.Exec(ctx, "DROP DATABASE "+pgx.Identifier{database}.Sanitize()); err != nil {
+		return fmt.Errorf("drop database: %w", err)
+	}
+
+	var roleExists bool
+	if err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1 AND NOT rolcanlogin)`, ownerRole).Scan(&roleExists); err != nil {
+		return fmt.Errorf("database dropped, but checking shared role %q failed: %w", ownerRole, err)
+	}
+	if roleExists {
+		if _, err := s.pool.Exec(ctx, "DROP ROLE "+pgx.Identifier{ownerRole}.Sanitize()); err != nil {
+			return fmt.Errorf("database dropped, but removing shared role %q failed: %w", ownerRole, err)
+		}
+	}
+	return nil
+}
+
+const clientSessions = `backend_type = 'client backend' AND pid <> pg_backend_pid() AND application_name <> '` + appName + `'`
+
+func (s *PostgresService) ListConnections(ctx context.Context) ([]Connection, error) {
+	rows, err := s.pool.Query(ctx, `
+SELECT pid, COALESCE(datname, ''), COALESCE(usename, ''), COALESCE(application_name, ''),
+	   COALESCE(client_addr::text, 'local'), COALESCE(state, ''),
+	   COALESCE(extract(epoch FROM now() - state_change)::bigint, 0),
+       regexp_replace(left(COALESCE(query, ''), 200), '\s+', ' ', 'g'),
+       COALESCE(wait_event_type || ':' || wait_event, ''),
+       pg_blocking_pids(pid)
+FROM pg_stat_activity
+WHERE `+clientSessions+`
+ORDER BY datname, state_change DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var connections []Connection
+	for rows.Next() {
+		var c Connection
+		var seconds int64
+		if err := rows.Scan(&c.PID, &c.Database, &c.User, &c.Application, &c.Client, &c.State, &seconds, &c.Query, &c.Wait, &c.BlockedBy); err != nil {
+			return nil, err
+		}
+		c.Since = formatDuration(seconds)
+		c.IdleTxLong = strings.HasPrefix(c.State, "idle in transaction") && seconds >= 60
+		connections = append(connections, c)
+	}
+	return connections, rows.Err()
+}
+
+func (s *PostgresService) TerminateConnection(ctx context.Context, pid int) error {
+	var terminated bool
+	err := s.pool.QueryRow(ctx, `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid = $1 AND `+clientSessions, pid).Scan(&terminated)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("connection %d no longer exists", pid)
+	}
+	if err != nil {
+		return err
+	}
+	if !terminated {
+		return fmt.Errorf("could not terminate connection %d", pid)
+	}
+	return nil
+}
+
+func (s *PostgresService) TerminateDatabaseConnections(ctx context.Context, database string) (int, error) {
+	if err := validateIdentifier("database", database); err != nil {
+		return 0, err
+	}
+	var count int
+	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM (SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND `+clientSessions+`) t`, database).Scan(&count)
+	return count, err
+}
+
+func (s *PostgresService) ServerHealth(ctx context.Context) (ServerHealth, error) {
+	var h ServerHealth
+	var uptime int64
+	err := s.pool.QueryRow(ctx, `
+SELECT current_setting('server_version'),
+       extract(epoch FROM now() - pg_postmaster_start_time())::bigint,
+       (SELECT count(*)::int FROM pg_stat_activity WHERE backend_type = 'client backend'),
+       current_setting('max_connections')::int,
+       COALESCE(round(100.0 * sum(blks_hit) / NULLIF(sum(blks_hit) + sum(blks_read), 0), 1)::text, 'n/a'),
+       (SELECT pg_size_pretty(sum(pg_database_size(oid))) FROM pg_database)
+FROM pg_stat_database`).Scan(&h.Version, &uptime, &h.Connections, &h.MaxConnections, &h.CachePercent, &h.TotalSize)
+	if err != nil {
+		return h, err
+	}
+	h.Version, _, _ = strings.Cut(h.Version, " ")
+	h.Uptime = formatDuration(uptime)
+	if h.MaxConnections > 0 {
+		h.UsedPercent = h.Connections * 100 / h.MaxConnections
+	}
+	return h, nil
+}
+
+func formatDuration(seconds int64) string {
+	switch {
+	case seconds < 60:
+		return fmt.Sprintf("%ds", seconds)
+	case seconds < 3600:
+		return fmt.Sprintf("%dm %ds", seconds/60, seconds%60)
+	case seconds < 86400:
+		return fmt.Sprintf("%dh %dm", seconds/3600, seconds%3600/60)
+	}
+	return fmt.Sprintf("%dd %dh", seconds/86400, seconds%86400/3600)
+}
+
+func (s *PostgresService) Endpoint() string {
+	host := s.baseConfig.Host
+	if host == "" || strings.HasPrefix(host, "/") {
+		return ""
+	}
+	return net.JoinHostPort(host, strconv.Itoa(int(s.baseConfig.Port)))
+}
+
+func connectionURL(endpoint, user, database string) string {
+	if endpoint == "" {
+		return ""
+	}
+	u := url.URL{Scheme: "postgresql", User: url.User(user), Host: endpoint, Path: "/" + database}
+	return u.String()
 }
 
 func validateIdentifier(label, value string) error {

@@ -2,12 +2,12 @@
 <section class="panel table-panel">
   <div class="panel-head"><label class="table-search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><input type="search" placeholder="Search databases..." aria-label="Search databases" data-table-search="databases-table"></label><div class="panel-tools"><span class="count-pill">{{len .Databases}} databases</span><a class="button small-button" href="/databases?add=1">Add database</a></div></div>
   <div class="table-wrap"><table id="databases-table"><thead><tr><th>Database</th><th>Owner</th><th>Size</th><th>Shared role</th><th>Full-access users</th><th>Status</th><th class="action-column">Action</th></tr></thead>
-  <tbody>{{range .Databases}}<tr><td><strong>{{.Name}}</strong></td><td>{{.Owner}}</td><td>{{.Size}}</td><td><code>{{.SharedOwnerRole}}</code></td><td><ul class="access-list">{{range .FullAccessUsers}}<li>{{.}}</li>{{else}}<li class="none">-</li>{{end}}</ul></td><td><span class="badge {{if eq .Status "Managed"}}managed{{else}}legacy{{end}}">{{.Status}}</span></td><td class="action-column"><a class="manage-button" href="/databases?inspect={{urlquery .Name}}">Manage access</a></td></tr>{{else}}<tr><td colspan="7" class="empty">No databases found</td></tr>{{end}}</tbody></table></div>
+  <tbody>{{range .Databases}}<tr><td><strong>{{.Name}}</strong></td><td>{{.Owner}}</td><td>{{.Size}}</td><td><code>{{.SharedOwnerRole}}</code></td><td><ul class="access-list">{{range .FullAccessUsers}}<li>{{.}}</li>{{else}}<li class="none">-</li>{{end}}</ul></td><td><span class="badge {{if eq .Status "Managed"}}managed{{else}}legacy{{end}}">{{.Status}}</span></td><td class="action-column"><div class="table-actions"><a class="manage-button" href="/databases?inspect={{urlquery .Name}}">Manage access</a><a class="delete-button" href="/databases?delete={{urlquery .Name}}">Delete</a></div></td></tr>{{else}}<tr><td colspan="7" class="empty">No databases found</td></tr>{{end}}</tbody></table></div>
 </section>
 
 {{if .ShowAdd}}
 <dialog class="form-dialog" data-auto-open aria-labelledby="add-database-title">
-  <div class="modal-head"><div><span class="eyebrow">NEW MANAGED DATABASE</span><h2 id="add-database-title">Add database</h2></div><a class="modal-close" href="/databases" aria-label="Close">×</a></div>
+  <div class="modal-head"><div><span class="eyebrow">new managed database</span><h2 id="add-database-title">Add database</h2></div><a class="modal-close" href="/databases" aria-label="Close">×</a></div>
   <form method="post" action="/databases" class="modal-form">
     <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
     <label>Database name<input name="database" required maxlength="63" spellcheck="false" autofocus></label>
@@ -17,9 +17,22 @@
 </dialog>
 {{end}}
 
+{{if .DeleteDatabase}}
+<dialog class="form-dialog" data-auto-open aria-labelledby="delete-database-title">
+  <div class="modal-head"><div><span class="eyebrow">delete database</span><h2 id="delete-database-title">{{.DeleteDatabase}}</h2></div><a class="modal-close" href="/databases" aria-label="Close">×</a></div>
+  <form method="post" action="/databases/delete" autocomplete="off" class="modal-form">
+    <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+    <input type="hidden" name="database" value="{{.DeleteDatabase}}">
+    <p class="form-note">This permanently drops the database and its <code>{{.DeleteDatabase}}__owner</code> role. It fails while other sessions are connected (<a class="text-link" href="/connections?database={{urlquery .DeleteDatabase}}">view connections</a>). This cannot be undone.</p>
+    <label><span>Type <code>{{.DeleteDatabase}}</code> to confirm</span><input name="confirm_name" required spellcheck="false" autofocus></label>
+    <div class="modal-actions"><a class="button secondary" href="/databases">Cancel</a><button type="submit" class="danger">Delete database</button></div>
+  </form>
+</dialog>
+{{end}}
+
 {{if .Preview}}
 <dialog class="manage-dialog" id="manage-access-dialog" data-auto-open aria-labelledby="manage-access-title">
-  <div class="modal-head"><div><span class="eyebrow">{{if .Preview.Managed}}USER ACCESS{{else}}MIGRATION &amp; USER ACCESS{{end}}</span><h2 id="manage-access-title">{{.Preview.Database}}</h2></div><a class="modal-close" href="/databases" aria-label="Close">×</a></div>
+  <div class="modal-head"><div><span class="eyebrow">{{if .Preview.Managed}}user access{{else}}migration &amp; user access{{end}}</span><h2 id="manage-access-title">{{.Preview.Database}}</h2></div><a class="modal-close" href="/databases" aria-label="Close">×</a></div>
   <div class="modal-scroll">
     <div class="preview-grid">
       <div><span>Current owner</span><strong>{{.Preview.DatabaseOwner}}</strong></div>
@@ -33,6 +46,9 @@
     <div class="chips">{{range .Preview.ExistingOwners}}<span>{{.}}</span>{{else}}<span>None</span>{{end}}</div>
     <p class="extension-note">Extension-managed objects skipped: <strong>{{.Preview.ExtensionsSkipped}}</strong>. Existing ACL grants remain unchanged.</p>
     {{end}}
+    {{if .ConnURL}}<h3>Connection string</h3>
+    <div class="copy-field"><input id="conn-url" readonly spellcheck="false" value="{{.ConnURL}}" aria-label="Connection string"><button type="button" class="button secondary small-button" data-copy="conn-url">Copy</button></div>
+    <p class="form-note">Password is not included. Host is the address this server uses to reach PostgreSQL.</p>{{end}}
     <form method="post" action="/databases/access" class="access-form database-access-form">
       <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
       <input type="hidden" name="database" value="{{.Preview.Database}}">

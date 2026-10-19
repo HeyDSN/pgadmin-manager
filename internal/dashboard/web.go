@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -63,6 +64,12 @@ type PageData struct {
 	ManagedPercent     int
 	UsersAvailable     bool
 	DatabasesAvailable bool
+	PasswordUser       string
+	DeleteDatabase     string
+	ConnURL            string
+	Connections        []Connection
+	ConnDatabase       string
+	Health             *ServerHealth
 }
 
 func NewHandler(service *PostgresService, logger *log.Logger) (http.Handler, error) {
@@ -76,7 +83,7 @@ func NewHandler(service *PostgresService, logger *log.Logger) (http.Handler, err
 		csrfToken: hex.EncodeToString(tokenBytes),
 		templates: make(map[string]*template.Template),
 	}
-	for _, page := range []string{"dashboard.html", "users.html", "databases.html"} {
+	for _, page := range []string{"dashboard.html", "users.html", "databases.html", "connections.html"} {
 		tmpl, err := template.ParseFS(webFiles, "web/templates/layout.html", "web/templates/"+page)
 		if err != nil {
 			return nil, fmt.Errorf("parse %s: %w", page, err)
@@ -95,11 +102,16 @@ func NewHandler(service *PostgresService, logger *log.Logger) (http.Handler, err
 	mux.HandleFunc("POST /users", h.createUser)
 	mux.HandleFunc("POST /users/delete", h.deleteUser)
 	mux.HandleFunc("POST /users/access", h.syncUserAccess)
+	mux.HandleFunc("POST /users/password", h.changePassword)
 	mux.HandleFunc("GET /databases", h.databases)
 	mux.HandleFunc("POST /databases", h.createDatabase)
+	mux.HandleFunc("POST /databases/delete", h.deleteDatabase)
 	mux.HandleFunc("POST /databases/full-access", h.grantFullAccess)
 	mux.HandleFunc("POST /databases/revoke-access", h.revokeFullAccess)
 	mux.HandleFunc("POST /databases/access", h.syncDatabaseAccess)
+	mux.HandleFunc("GET /connections", h.connections)
+	mux.HandleFunc("POST /connections/terminate", h.terminateConnection)
+	mux.HandleFunc("POST /connections/terminate-database", h.terminateDatabaseConnections)
 	mux.HandleFunc("GET /healthz", h.health)
 	mux.Handle("GET /static/", h.static)
 	return h.securityHeaders(h.requestLog(mux)), nil
@@ -116,6 +128,9 @@ func (h *Handler) dashboard(w http.ResponseWriter, r *http.Request) {
 	if userErr != nil || databaseErr != nil {
 		data.ServerStatus = "Error"
 		data.Error = joinErrors(userErr, databaseErr)
+	}
+	if health, err := h.service.ServerHealth(r.Context()); err == nil {
+		data.Health = &health
 	}
 	data.UsersAvailable = userErr == nil
 	data.DatabasesAvailable = databaseErr == nil
@@ -202,6 +217,37 @@ func (h *Handler) deleteUser(w http.ResponseWriter, r *http.Request) {
 	redirectSuccess(w, r, "/users", fmt.Sprintf("User %s deleted", username))
 }
 
+func (h *Handler) changePassword(w http.ResponseWriter, r *http.Request) {
+	if !h.validForm(w, r) {
+		return
+	}
+	username := r.FormValue("username")
+	if err := h.service.ChangeUserPassword(r.Context(), username, r.FormValue("password")); err != nil {
+		r.URL.RawQuery = url.Values{"password": {username}}.Encode()
+		h.renderUsers(w, r, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	redirectSuccess(w, r, "/users", fmt.Sprintf("Password updated for %s", username))
+}
+
+func (h *Handler) deleteDatabase(w http.ResponseWriter, r *http.Request) {
+	if !h.validForm(w, r) {
+		return
+	}
+	database := r.FormValue("database")
+	if r.FormValue("confirm_name") != database {
+		r.URL.RawQuery = url.Values{"delete": {database}}.Encode()
+		h.renderDatabases(w, r, http.StatusUnprocessableEntity, "typed name does not match the database name")
+		return
+	}
+	if err := h.service.DeleteDatabase(r.Context(), database); err != nil {
+		r.URL.RawQuery = url.Values{"delete": {database}}.Encode()
+		h.renderDatabases(w, r, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	redirectSuccess(w, r, "/databases", fmt.Sprintf("Database %s deleted", database))
+}
+
 func (h *Handler) syncUserAccess(w http.ResponseWriter, r *http.Request) {
 	if !h.validForm(w, r) {
 		return
@@ -276,6 +322,13 @@ func (h *Handler) renderUsers(w http.ResponseWriter, r *http.Request, status int
 		} else {
 			for _, database := range databases {
 				data.AccessChoices = append(data.AccessChoices, AccessChoice{Name: database.Name, Checked: mapped[database.Name], Status: database.Status})
+			}
+		}
+	}
+	if name := r.URL.Query().Get("password"); name != "" {
+		for _, user := range users {
+			if user.Name == name && !user.Superuser {
+				data.PasswordUser = name
 			}
 		}
 	}
@@ -471,13 +524,96 @@ func (h *Handler) renderDatabases(w http.ResponseWriter, r *http.Request, status
 					data.AccessChoices = append(data.AccessChoices, AccessChoice{Name: user.Name, Checked: mapped[user.Name]})
 				}
 			}
+			user := "USER"
+			for _, u := range users {
+				if mapped[u.Name] {
+					user = u.Name
+					break
+				}
+			}
+			data.ConnURL = connectionURL(h.service.Endpoint(), user, inspect)
 			for name, count := range preview.Counts {
 				data.PreviewCounts = append(data.PreviewCounts, CountRow{Name: name, Count: count})
 			}
 			sort.Slice(data.PreviewCounts, func(i, j int) bool { return data.PreviewCounts[i].Name < data.PreviewCounts[j].Name })
 		}
 	}
+	if name := r.URL.Query().Get("delete"); name != "" {
+		for _, database := range databases {
+			if database.Name == name {
+				data.DeleteDatabase = name
+			}
+		}
+	}
 	h.render(w, status, "databases.html", data)
+}
+
+func (h *Handler) connections(w http.ResponseWriter, r *http.Request) {
+	h.renderConnections(w, r, http.StatusOK, "")
+}
+
+func (h *Handler) renderConnections(w http.ResponseWriter, r *http.Request, status int, actionError string) {
+	all, err := h.service.ListConnections(r.Context())
+	database := r.URL.Query().Get("database")
+	shown := all
+	if database != "" {
+		shown = nil
+		for _, c := range all {
+			if c.Database == database {
+				shown = append(shown, c)
+			}
+		}
+	}
+	h.render(w, status, "connections.html", PageData{
+		Title: "Connections", Active: "connections", CSRFToken: h.csrfToken,
+		ServerStatus: databaseServerStatus(err), Connections: shown, ConnDatabase: database,
+		Success: r.URL.Query().Get("success"), Error: joinErrors(errorFromString(actionError), err),
+	})
+}
+
+func (h *Handler) terminateConnection(w http.ResponseWriter, r *http.Request) {
+	if !h.validForm(w, r) {
+		return
+	}
+	if r.FormValue("confirmed") != "yes" {
+		http.Error(w, "confirmation is required", http.StatusBadRequest)
+		return
+	}
+	pid, err := strconv.Atoi(r.FormValue("pid"))
+	if err != nil {
+		http.Error(w, "invalid pid", http.StatusBadRequest)
+		return
+	}
+	if err := h.service.TerminateConnection(r.Context(), pid); err != nil {
+		h.renderConnections(w, r, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	redirectConnections(w, r, r.FormValue("database"), fmt.Sprintf("Connection %d terminated", pid))
+}
+
+func (h *Handler) terminateDatabaseConnections(w http.ResponseWriter, r *http.Request) {
+	if !h.validForm(w, r) {
+		return
+	}
+	if r.FormValue("confirmed") != "yes" {
+		http.Error(w, "confirmation is required", http.StatusBadRequest)
+		return
+	}
+	database := r.FormValue("database")
+	count, err := h.service.TerminateDatabaseConnections(r.Context(), database)
+	if err != nil {
+		h.renderConnections(w, r, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	redirectConnections(w, r, database, fmt.Sprintf("Terminated %d connection(s) on %s", count, database))
+}
+
+func redirectConnections(w http.ResponseWriter, r *http.Request, database, message string) {
+	query := url.Values{"success": {message}}
+	if database != "" {
+		query.Set("database", database)
+	}
+	http.Redirect(w, r, "/connections?"+query.Encode(), http.StatusSeeOther)
 }
 
 func (h *Handler) health(w http.ResponseWriter, r *http.Request) {

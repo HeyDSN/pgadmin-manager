@@ -67,3 +67,22 @@ func TestValidateIdentifierRejectsNullByte(t *testing.T) {
 		t.Fatal("expected null-byte validation error")
 	}
 }
+
+func TestConnectionURL(t *testing.T) {
+	t.Parallel()
+	if got, want := connectionURL("db.internal:5432", "alice", "shop"), "postgresql://alice@db.internal:5432/shop"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	if got := connectionURL("", "alice", "shop"); got != "" {
+		t.Fatalf("socket endpoint should yield no URL, got %q", got)
+	}
+}
+
+func TestFormatDuration(t *testing.T) {
+	t.Parallel()
+	for seconds, want := range map[int64]string{5: "5s", 75: "1m 15s", 7260: "2h 1m", 90000: "1d 1h"} {
+		if got := formatDuration(seconds); got != want {
+			t.Fatalf("formatDuration(%d) = %q, want %q", seconds, got, want)
+		}
+	}
+}
